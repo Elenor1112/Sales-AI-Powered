@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { graphFetch } from "./client";
-import { getAllRequestedScopes } from "./permissions";
+import { META_REQUIRED_SCOPES } from "./permissions";
 import type { MetaOAuthTokenResponse } from "./types";
 
 const OAUTH_DIALOG_URL = "https://www.facebook.com/v20.0/dialog/oauth";
@@ -71,7 +71,11 @@ export function buildAuthUrl(state: string): string {
   url.searchParams.set("client_id", appId);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
-  url.searchParams.set("scope", getAllRequestedScopes().join(","));
+  // TEMP: testing with required scopes only to isolate the "Invalid Scopes"
+  // error — ads_management/ads_read need the Marketing API use case added
+  // in the Meta dashboard before they can be requested. Revert to
+  // getAllRequestedScopes() once that's set up.
+  url.searchParams.set("scope", META_REQUIRED_SCOPES.join(","));
   url.searchParams.set("response_type", "code");
   return url.toString();
 }
