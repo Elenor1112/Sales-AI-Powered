@@ -95,7 +95,7 @@ describe("assignment concurrency safety", () => {
     // decision is serialized through the locked AssignmentState row.
     expect(Object.values(counts).sort()).toEqual([3, 3, 3]);
 
-    const thisTestLeadIds = leads.map((l) => l.id);
+    const thisTestLeadIds = leads.map((l: Lead) => l.id);
     const assignmentRecords = await prisma.leadAssignment.findMany({
       where: { organizationId, leadId: { in: thisTestLeadIds } },
     });
