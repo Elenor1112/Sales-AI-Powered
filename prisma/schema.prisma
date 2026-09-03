@@ -1,0 +1,811 @@
+// Vivid Sales CRM — core data model
+// See docs/lead-distribution.md and docs/meta-integration.md for behavioral context.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ADMIN
+  SALES_MANAGER
+  SALES_REP
+}
+
+enum LeadSource {
+  META
+  FACEBOOK
+  INSTAGRAM
+  WEBSITE
+  MANUAL
+  OTHER
+}
+
+enum LeadStatus {
+  NEW
+  ASSIGNED
+  CONTACTED
+  QUALIFIED
+  PROPOSAL
+  WON
+  LOST
+}
+
+enum AssignmentStatus {
+  UNASSIGNED
+  ASSIGNED
+  REASSIGNMENT_REQUIRED
+}
+
+enum AssignmentMethod {
+  ROUND_ROBIN
+  LEAST_ASSIGNED
+  WEIGHTED_ROUND_ROBIN
+  MANUAL
+  RULE_BASED
+}
+
+enum AssignmentStrategy {
+  ROUND_ROBIN
+  LEAST_ASSIGNED
+  WEIGHTED_ROUND_ROBIN
+  MANUAL
+}
+
+enum FallbackBehavior {
+  UNASSIGNED_QUEUE
+  DEFAULT_TEAM
+}
+
+enum ImportAssignmentMode {
+  ASSIGN_IMPORTED_LEADS
+  DO_NOT_ASSIGN_IMPORTED_LEADS
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum DealStage {
+  QUALIFICATION
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum ActivityType {
+  CREATED
+  STATUS_CHANGED
+  ASSIGNED
+  REASSIGNED
+  ASSIGNMENT_FAILED
+  NOTE_ADDED
+  CONTACTED
+  QUALIFIED
+  PROPOSAL_SENT
+  WON
+  LOST
+  IMPORTED
+  META_SYNCHRONIZED
+  TASK_CREATED
+  TASK_COMPLETED
+  DEAL_CREATED
+  DEAL_UPDATED
+  TAG_ADDED
+}
+
+enum NotificationType {
+  NEW_META_LEAD
+  LEAD_AUTO_ASSIGNED
+  LEAD_MANUAL_ASSIGNED
+  LEAD_REASSIGNED
+  ASSIGNMENT_FAILED
+  LEAD_UNASSIGNED
+  FOLLOWUP_DUE
+  FOLLOWUP_OVERDUE
+  LEAD_QUALIFIED
+  DEAL_WON
+  DEAL_LOST
+  META_SYNC_FAILURE
+  META_CONNECTION_FAILURE
+  CAPACITY_REACHED
+  NO_ELIGIBLE_SALESPERSON
+}
+
+enum MetaConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+  EXPIRED
+}
+
+enum MetaSyncStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  PARTIAL
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  DUPLICATE
+}
+
+// ---------------------------------------------------------------------------
+// Organizations & Users
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users              User[]
+  salesTeams         SalesTeam[]
+  leads              Lead[]
+  leadAssignments    LeadAssignment[]
+  assignmentHistory  AssignmentHistory[]
+  assignmentSettings AssignmentSettings?
+  assignmentRules    AssignmentRule[]
+  assignmentStates   AssignmentState[]
+  tasks              Task[]
+  deals              Deal[]
+  tags               Tag[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  metaConnections    MetaConnection[]
+  metaPages          MetaPage[]
+  metaForms          MetaForm[]
+  metaCampaigns      MetaCampaign[]
+  metaAdSets         MetaAdSet[]
+  metaAds            MetaAd[]
+  metaSyncs          MetaSync[]
+  leadActivities     LeadActivity[]
+  notes              Note[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  name           String
+  email          String   @unique
+  passwordHash   String?  @map("password_hash")
+  role           Role     @default(SALES_REP)
+  avatarUrl      String?  @map("avatar_url")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  salesTeamMemberships  SalesTeamMember[]
+  assignedLeads         Lead[]               @relation("LeadAssignedUser")
+  ownedDeals            Deal[]               @relation("DealOwner")
+  assignedTasks         Task[]               @relation("TaskAssignee")
+  createdTasks          Task[]               @relation("TaskCreator")
+  notes                 Note[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+  connectedMetaAccounts MetaConnection[]     @relation("MetaConnectedBy")
+  passwordResetTokens   PasswordResetToken[]
+
+  accounts       Account[]
+  sessions       Session[]
+  leadActivities LeadActivity[]
+
+  leadAssignments              LeadAssignment[]    @relation("LeadAssignmentAssignedUser")
+  assignmentHistoryAsPrevious  AssignmentHistory[] @relation("AssignmentHistoryPreviousUser")
+  assignmentHistoryAsNew       AssignmentHistory[] @relation("AssignmentHistoryNewUser")
+  assignmentHistoryAsChangedBy AssignmentHistory[] @relation("AssignmentHistoryChangedBy")
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+// Auth.js adapter-compatible models (kept for forward compatibility; the
+// credentials + JWT session flow used in src/lib/auth.ts does not populate
+// Session/Account rows today — see docs/sales-system.md for rationale).
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_reset_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Sales Teams & Assignment
+// ---------------------------------------------------------------------------
+
+model SalesTeam {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  name           String
+  description    String?
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members            SalesTeamMember[]
+  leads              Lead[]               @relation("LeadAssignedTeam")
+  assignmentSettings AssignmentSettings[] @relation("DefaultTeam")
+  assignmentRules    AssignmentRule[]
+  assignmentStates   AssignmentState[]
+  leadAssignments    LeadAssignment[]
+
+  assignmentHistoryAsPrevious AssignmentHistory[] @relation("AssignmentHistoryPreviousTeam")
+  assignmentHistoryAsNew      AssignmentHistory[] @relation("AssignmentHistoryNewTeam")
+
+  @@index([organizationId])
+  @@map("sales_teams")
+}
+
+model SalesTeamMember {
+  id               String    @id @default(cuid())
+  organizationId   String    @map("organization_id")
+  teamId           String    @map("team_id")
+  userId           String    @map("user_id")
+  isActive         Boolean   @default(true) @map("is_active")
+  isPaused         Boolean   @default(false) @map("is_paused")
+  assignmentWeight Int       @default(1) @map("assignment_weight")
+  maxActiveLeads   Int?      @map("max_active_leads")
+  lastAssignedAt   DateTime? @map("last_assigned_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  team SalesTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, teamId, userId])
+  @@index([teamId])
+  @@index([organizationId, userId])
+  @@map("sales_team_members")
+}
+
+model AssignmentSettings {
+  id                         String               @id @default(cuid())
+  organizationId             String               @unique @map("organization_id")
+  automaticAssignmentEnabled Boolean              @default(true) @map("automatic_assignment_enabled")
+  defaultStrategy            AssignmentStrategy   @default(ROUND_ROBIN) @map("default_strategy")
+  defaultTeamId              String?              @map("default_team_id")
+  enforceCapacity            Boolean              @default(true) @map("enforce_capacity")
+  notifyAssignedUser         Boolean              @default(true) @map("notify_assigned_user")
+  notifyManagersOnUnassigned Boolean              @default(true) @map("notify_managers_on_unassigned")
+  fallbackBehavior           FallbackBehavior     @default(UNASSIGNED_QUEUE) @map("fallback_behavior")
+  importAssignmentMode       ImportAssignmentMode @default(ASSIGN_IMPORTED_LEADS) @map("import_assignment_mode")
+  createdAt                  DateTime             @default(now()) @map("created_at")
+  updatedAt                  DateTime             @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  defaultTeam  SalesTeam?   @relation("DefaultTeam", fields: [defaultTeamId], references: [id])
+
+  @@map("assignment_settings")
+}
+
+model AssignmentRule {
+  id             String             @id @default(cuid())
+  organizationId String             @map("organization_id")
+  name           String
+  priority       Int
+  isActive       Boolean            @default(true) @map("is_active")
+  source         LeadSource?
+  metaPageId     String?            @map("meta_page_id")
+  metaFormId     String?            @map("meta_form_id")
+  metaCampaignId String?            @map("meta_campaign_id")
+  metaAdSetId    String?            @map("meta_ad_set_id")
+  metaAdId       String?            @map("meta_ad_id")
+  conditions     Json?
+  teamId         String             @map("team_id")
+  strategy       AssignmentStrategy
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team         SalesTeam    @relation(fields: [teamId], references: [id])
+
+  @@index([organizationId, priority])
+  @@index([organizationId, isActive])
+  @@map("assignment_rules")
+}
+
+model AssignmentState {
+  id                 String             @id @default(cuid())
+  organizationId     String             @map("organization_id")
+  teamId             String             @map("team_id")
+  strategy           AssignmentStrategy
+  roundRobinIndex    Int                @default(0) @map("round_robin_index")
+  lastAssignedUserId String?            @map("last_assigned_user_id")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  team         SalesTeam    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, teamId, strategy])
+  @@map("assignment_states")
+}
+
+model LeadAssignment {
+  id               String           @id @default(cuid())
+  organizationId   String           @map("organization_id")
+  leadId           String           @map("lead_id")
+  assignedUserId   String?          @map("assigned_user_id")
+  teamId           String?          @map("team_id")
+  assignmentMethod AssignmentMethod @map("assignment_method")
+  assignmentRuleId String?          @map("assignment_rule_id")
+  assignmentReason String?          @map("assignment_reason")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  team         SalesTeam?   @relation(fields: [teamId], references: [id])
+  assignedUser User?        @relation("LeadAssignmentAssignedUser", fields: [assignedUserId], references: [id])
+
+  @@index([leadId])
+  @@index([organizationId, assignedUserId])
+  @@index([organizationId, assignmentMethod])
+  @@map("lead_assignments")
+}
+
+model AssignmentHistory {
+  id               String           @id @default(cuid())
+  organizationId   String           @map("organization_id")
+  leadId           String           @map("lead_id")
+  previousUserId   String?          @map("previous_user_id")
+  newUserId        String?          @map("new_user_id")
+  previousTeamId   String?          @map("previous_team_id")
+  newTeamId        String?          @map("new_team_id")
+  changedByUserId  String?          @map("changed_by_user_id")
+  assignmentMethod AssignmentMethod @map("assignment_method")
+  assignmentRuleId String?          @map("assignment_rule_id")
+  reason           String?
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead          Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  previousUser  User?        @relation("AssignmentHistoryPreviousUser", fields: [previousUserId], references: [id])
+  newUser       User?        @relation("AssignmentHistoryNewUser", fields: [newUserId], references: [id])
+  previousTeam  SalesTeam?   @relation("AssignmentHistoryPreviousTeam", fields: [previousTeamId], references: [id])
+  newTeam       SalesTeam?   @relation("AssignmentHistoryNewTeam", fields: [newTeamId], references: [id])
+  changedByUser User?        @relation("AssignmentHistoryChangedBy", fields: [changedByUserId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@map("assignment_history")
+}
+
+// ---------------------------------------------------------------------------
+// Leads & Pipeline
+// ---------------------------------------------------------------------------
+
+model Lead {
+  id               String            @id @default(cuid())
+  organizationId   String            @map("organization_id")
+  name             String
+  firstName        String?           @map("first_name")
+  lastName         String?           @map("last_name")
+  email            String?
+  phone            String?
+  company          String?
+  jobTitle         String?           @map("job_title")
+  source           LeadSource        @default(MANUAL)
+  status           LeadStatus        @default(NEW)
+  priority         TaskPriority      @default(MEDIUM)
+  assignedUserId   String?           @map("assigned_user_id")
+  assignedTeamId   String?           @map("assigned_team_id")
+  assignmentStatus AssignmentStatus  @default(UNASSIGNED) @map("assignment_status")
+  assignmentMethod AssignmentMethod? @map("assignment_method")
+  notesSummary     String?           @map("notes_summary")
+  estimatedValue   Decimal?          @map("estimated_value") @db.Decimal(14, 2)
+  currency         String?           @default("USD")
+  lostReason       String?           @map("lost_reason")
+
+  metaLeadId     String? @map("meta_lead_id")
+  metaPageId     String? @map("meta_page_id")
+  metaFormId     String? @map("meta_form_id")
+  metaCampaignId String? @map("meta_campaign_id")
+  metaAdSetId    String? @map("meta_ad_set_id")
+  metaAdId       String? @map("meta_ad_id")
+
+  customFields     Json? @map("custom_fields")
+  rawSourcePayload Json? @map("raw_source_payload")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  contactedAt DateTime? @map("contacted_at")
+  qualifiedAt DateTime? @map("qualified_at")
+  proposalAt  DateTime? @map("proposal_at")
+  wonAt       DateTime? @map("won_at")
+  lostAt      DateTime? @map("lost_at")
+
+  organization      Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedUser      User?               @relation("LeadAssignedUser", fields: [assignedUserId], references: [id])
+  assignedTeam      SalesTeam?          @relation("LeadAssignedTeam", fields: [assignedTeamId], references: [id])
+  activities        LeadActivity[]
+  notes             Note[]
+  tasks             Task[]
+  deals             Deal[]
+  leadTags          LeadTag[]
+  assignments       LeadAssignment[]
+  assignmentHistory AssignmentHistory[]
+
+  // Meta lead id must be unique per organization (integration scope), not globally.
+  // Postgres treats NULLs as distinct, so non-Meta leads (metaLeadId = null) never collide here.
+  @@unique([organizationId, metaLeadId], map: "uq_lead_org_meta_lead_id")
+  @@index([organizationId, status])
+  @@index([organizationId, assignmentStatus])
+  @@index([organizationId, assignedUserId])
+  @@index([organizationId, assignedTeamId])
+  @@index([organizationId, source])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, email])
+  @@index([organizationId, phone])
+  @@map("leads")
+}
+
+model LeadActivity {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  leadId         String       @map("lead_id")
+  userId         String?      @map("user_id")
+  activityType   ActivityType @map("activity_type")
+  metadata       Json?
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@index([organizationId, activityType])
+  @@map("lead_activities")
+}
+
+model Note {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  leadId         String   @map("lead_id")
+  userId         String   @map("user_id")
+  content        String
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([leadId, createdAt])
+  @@map("notes")
+}
+
+model Task {
+  id              String       @id @default(cuid())
+  organizationId  String       @map("organization_id")
+  leadId          String?      @map("lead_id")
+  dealId          String?      @map("deal_id")
+  assignedUserId  String       @map("assigned_user_id")
+  createdByUserId String       @map("created_by_user_id")
+  title           String
+  description     String?
+  dueDate         DateTime?    @map("due_date")
+  status          TaskStatus   @default(PENDING)
+  priority        TaskPriority @default(MEDIUM)
+  completedAt     DateTime?    @map("completed_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  deal         Deal?        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  assignedUser User         @relation("TaskAssignee", fields: [assignedUserId], references: [id])
+  createdBy    User         @relation("TaskCreator", fields: [createdByUserId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([assignedUserId, dueDate])
+  @@index([leadId])
+  @@map("tasks")
+}
+
+model Tag {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  name           String
+  color          String?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leadTags     LeadTag[]
+
+  @@unique([organizationId, name])
+  @@map("tags")
+}
+
+model LeadTag {
+  id        String   @id @default(cuid())
+  leadId    String   @map("lead_id")
+  tagId     String   @map("tag_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([leadId, tagId])
+  @@map("lead_tags")
+}
+
+model Deal {
+  id                String    @id @default(cuid())
+  organizationId    String    @map("organization_id")
+  leadId            String?   @map("lead_id")
+  ownerId           String    @map("owner_id")
+  name              String
+  value             Decimal?  @db.Decimal(14, 2)
+  currency          String?   @default("USD")
+  stage             DealStage @default(QUALIFICATION)
+  expectedCloseDate DateTime? @map("expected_close_date")
+  probability       Int?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  wonAt             DateTime? @map("won_at")
+  lostAt            DateTime? @map("lost_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id])
+  owner        User         @relation("DealOwner", fields: [ownerId], references: [id])
+  tasks        Task[]
+
+  @@index([organizationId, stage])
+  @@index([organizationId, ownerId])
+  @@map("deals")
+}
+
+model Notification {
+  id             String           @id @default(cuid())
+  organizationId String           @map("organization_id")
+  userId         String           @map("user_id")
+  type           NotificationType
+  title          String
+  message        String
+  metadata       Json?
+  readAt         DateTime?        @map("read_at")
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([organizationId, createdAt])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  userId         String?  @map("user_id")
+  action         String
+  entityType     String   @map("entity_type")
+  entityId       String   @map("entity_id")
+  metadata       Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, entityType, entityId])
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Meta Integration
+// ---------------------------------------------------------------------------
+
+model MetaConnection {
+  id                   String               @id @default(cuid())
+  organizationId       String               @unique @map("organization_id")
+  connectedByUserId    String               @map("connected_by_user_id")
+  status               MetaConnectionStatus @default(DISCONNECTED)
+  metaUserId           String?              @map("meta_user_id")
+  accessTokenEncrypted String?              @map("access_token_encrypted")
+  tokenExpiresAt       DateTime?            @map("token_expires_at")
+  scopes               String[]             @default([])
+  lastError            String?              @map("last_error")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectedBy  User         @relation("MetaConnectedBy", fields: [connectedByUserId], references: [id])
+  pages        MetaPage[]
+  syncs        MetaSync[]
+
+  @@map("meta_connections")
+}
+
+model MetaPage {
+  id                   String   @id @default(cuid())
+  organizationId       String   @map("organization_id")
+  connectionId         String   @map("connection_id")
+  metaPageId           String   @map("meta_page_id")
+  name                 String
+  accessTokenEncrypted String?  @map("access_token_encrypted")
+  isSubscribed         Boolean  @default(false) @map("is_subscribed")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connection   MetaConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  forms        MetaForm[]
+
+  @@unique([organizationId, metaPageId])
+  @@map("meta_pages")
+}
+
+model MetaForm {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  pageId         String   @map("page_id")
+  metaFormId     String   @map("meta_form_id")
+  name           String
+  status         String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  page         MetaPage     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, metaFormId])
+  @@map("meta_forms")
+}
+
+model MetaCampaign {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  metaCampaignId String   @map("meta_campaign_id")
+  name           String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, metaCampaignId])
+  @@map("meta_campaigns")
+}
+
+model MetaAdSet {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  metaAdSetId    String   @map("meta_ad_set_id")
+  metaCampaignId String?  @map("meta_campaign_id")
+  name           String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, metaAdSetId])
+  @@map("meta_ad_sets")
+}
+
+model MetaAd {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  metaAdId       String   @map("meta_ad_id")
+  metaAdSetId    String?  @map("meta_ad_set_id")
+  name           String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, metaAdId])
+  @@map("meta_ads")
+}
+
+model MetaSync {
+  id                String         @id @default(cuid())
+  organizationId    String         @map("organization_id")
+  connectionId      String         @map("connection_id")
+  triggeredByUserId String?        @map("triggered_by_user_id")
+  mode              String         @default("historical") // "historical" | "backup"
+  status            MetaSyncStatus @default(PENDING)
+  leadsFetched      Int            @default(0) @map("leads_fetched")
+  leadsCreated      Int            @default(0) @map("leads_created")
+  leadsUpdated      Int            @default(0) @map("leads_updated")
+  leadsSkipped      Int            @default(0) @map("leads_skipped")
+  leadsAssigned     Int            @default(0) @map("leads_assigned")
+  leadsUnassigned   Int            @default(0) @map("leads_unassigned")
+  errorMessage      String?        @map("error_message")
+  startedAt         DateTime       @default(now()) @map("started_at")
+  finishedAt        DateTime?      @map("finished_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connection   MetaConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, startedAt])
+  @@map("meta_syncs")
+}
+
+model MetaWebhookEvent {
+  id               String             @id @default(cuid())
+  eventFingerprint String             @unique @map("event_fingerprint")
+  organizationId   String?            @map("organization_id")
+  metaLeadId       String?            @map("meta_lead_id")
+  metaPageId       String?            @map("meta_page_id")
+  payload          Json
+  processedAt      DateTime?          @map("processed_at")
+  status           WebhookEventStatus @default(RECEIVED)
+  errorMessage     String?            @map("error_message")
+  createdAt        DateTime           @default(now()) @map("created_at")
+
+  @@index([metaLeadId])
+  @@index([metaPageId])
+  @@map("meta_webhook_events")
+}
