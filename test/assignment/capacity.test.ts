@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import type { Prisma, User } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getEligibleMembers } from "@/server/assignment/assignment.capacity";
+import type { EligibleMember } from "@/server/assignment/assignment.types";
 
 describe("getEligibleMembers", () => {
   let organizationId: string;
@@ -27,7 +29,7 @@ describe("getEligibleMembers", () => {
         })
       )
     );
-    userIds.push(...users.map((u) => u.id));
+    userIds.push(...users.map((u: User) => u.id));
 
     await prisma.salesTeamMember.create({
       data: { organizationId, teamId, userId: users[0].id, isActive: true, isPaused: false },
@@ -57,7 +59,7 @@ describe("getEligibleMembers", () => {
   });
 
   it("excludes paused, inactive-account, and at-capacity members, keeping only the active eligible one", async () => {
-    const eligible = await prisma.$transaction((tx) =>
+    const eligible = await prisma.$transaction((tx: Prisma.TransactionClient) =>
       getEligibleMembers(tx, organizationId, teamId, { enforceCapacity: true })
     );
     expect(eligible).toHaveLength(1);
@@ -65,10 +67,10 @@ describe("getEligibleMembers", () => {
   });
 
   it("includes the at-capacity member when capacity enforcement is disabled", async () => {
-    const eligible = await prisma.$transaction((tx) =>
+    const eligible = await prisma.$transaction((tx: Prisma.TransactionClient) =>
       getEligibleMembers(tx, organizationId, teamId, { enforceCapacity: false })
     );
-    const eligibleIds = eligible.map((m) => m.userId);
+    const eligibleIds = eligible.map((m: EligibleMember) => m.userId);
     expect(eligibleIds).toContain(userIds[0]);
     expect(eligibleIds).toContain(userIds[3]);
     expect(eligibleIds).not.toContain(userIds[1]); // still paused
@@ -77,7 +79,7 @@ describe("getEligibleMembers", () => {
 
   it("returns an empty array when the team has no members", async () => {
     const emptyTeam = await prisma.salesTeam.create({ data: { organizationId, name: "Empty Team" } });
-    const eligible = await prisma.$transaction((tx) =>
+    const eligible = await prisma.$transaction((tx: Prisma.TransactionClient) =>
       getEligibleMembers(tx, organizationId, emptyTeam.id, { enforceCapacity: true })
     );
     expect(eligible).toEqual([]);

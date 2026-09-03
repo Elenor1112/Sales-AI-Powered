@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import type { Lead, User } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { assignLead } from "@/server/assignment/assignment.service";
+import type { AssignLeadResult } from "@/server/assignment/assignment.types";
 
 describe("assignment concurrency safety", () => {
   let organizationId: string;
@@ -23,7 +25,7 @@ describe("assignment concurrency safety", () => {
         })
       )
     );
-    userIds.push(...users.map((u) => u.id));
+    userIds.push(...users.map((u: User) => u.id));
 
     for (const user of users) {
       await prisma.salesTeamMember.create({ data: { organizationId, teamId, userId: user.id } });
@@ -77,10 +79,10 @@ describe("assignment concurrency safety", () => {
     );
 
     const results = await Promise.all(
-      leads.map((lead) => assignLead({ leadId: lead.id, organizationId, trigger: "AUTO" }))
+      leads.map((lead: Lead) => assignLead({ leadId: lead.id, organizationId, trigger: "AUTO" }))
     );
 
-    expect(results.every((r) => r.status === "ASSIGNED")).toBe(true);
+    expect(results.every((r: AssignLeadResult) => r.status === "ASSIGNED")).toBe(true);
 
     const counts: Record<string, number> = {};
     for (const result of results) {
@@ -97,7 +99,7 @@ describe("assignment concurrency safety", () => {
     const assignmentRecords = await prisma.leadAssignment.findMany({
       where: { organizationId, leadId: { in: thisTestLeadIds } },
     });
-    const distinctLeadIds = new Set(assignmentRecords.map((r) => r.leadId));
+    const distinctLeadIds = new Set(assignmentRecords.map((r: { leadId: string }) => r.leadId));
     expect(assignmentRecords).toHaveLength(leadCount); // exactly one assignment record per lead, no duplicates
     expect(distinctLeadIds.size).toBe(leadCount);
   }, 30000);
